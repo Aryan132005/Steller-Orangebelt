@@ -1,0 +1,42 @@
+name: Deploy Frontend
+
+# Optional: deploys frontend/dist to Vercel on every push to main.
+# To enable:
+#   1. Create a Vercel project pointed at this repo (frontend/ as root), OR
+#      remove this workflow and use Vercel's/Netlify's native Git integration
+#      instead (simpler — most teams just do this and skip this file).
+#   2. If keeping this workflow, add these repository secrets:
+#      VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID
+#   3. Never commit tokens directly — only reference them via ${{ secrets.* }}.
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy:
+    name: Deploy to Vercel
+    runs-on: ubuntu-latest
+    if: ${{ vars.ENABLE_DEPLOY == 'true' }}
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install Vercel CLI
+        run: npm install --global vercel@latest
+
+      - name: Pull Vercel environment
+        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build project
+        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to Vercel
+        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
