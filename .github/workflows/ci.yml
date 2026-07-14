@@ -6,46 +6,58 @@ on:
   pull_request:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   contracts:
     name: Contracts (Rust)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: contracts
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@master
         with:
           toolchain: stable
-          targets: wasm32v1-none
+          targets: wasm32v1-none, wasm32-unknown-unknown
 
-      - name: Cache cargo registry
+      - name: Cache Cargo registry and target
         uses: actions/cache@v4
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-          key: ${{ runner.os }}-cargo-${{ hashFiles('contracts/**/Cargo.toml') }}
+            contracts/rewards_contract/target
+            contracts/poll_contract/target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
 
       - name: Test rewards_contract
-        working-directory: contracts/rewards_contract
         run: cargo test --verbose
+        working-directory: contracts/rewards_contract
 
       - name: Test poll_contract (includes cross-contract integration tests)
-        working-directory: contracts/poll_contract
         run: cargo test --verbose
+        working-directory: contracts/poll_contract
+
+      - name: Build rewards_contract (WASM)
+        run: cargo build --target wasm32-unknown-unknown --release
+        working-directory: contracts/rewards_contract
+
+      - name: Build poll_contract (WASM)
+        run: cargo build --target wasm32-unknown-unknown --release
+        working-directory: contracts/poll_contract
 
   frontend:
     name: Frontend (Vite + Vitest)
     runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: frontend
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
@@ -56,9 +68,12 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
+        working-directory: frontend
 
       - name: Run tests
         run: npm run test
+        working-directory: frontend
 
       - name: Type-check and build
         run: npm run build
+        working-directory: frontend
