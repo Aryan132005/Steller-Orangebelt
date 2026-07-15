@@ -1,42 +1,75 @@
-name: Deploy Frontend
-
-# Optional: deploys frontend/dist to Vercel on every push to main.
-# To enable:
-#   1. Create a Vercel project pointed at this repo (frontend/ as root), OR
-#      remove this workflow and use Vercel's/Netlify's native Git integration
-#      instead (simpler — most teams just do this and skip this file).
-#   2. If keeping this workflow, add these repository secrets:
-#      VERCEL_TOKEN, VERCEL_ORG_ID, VERCEL_PROJECT_ID
-#   3. Never commit tokens directly — only reference them via ${{ secrets.* }}.
+name: Deploy Contracts to Testnet
 
 on:
-  push:
-    branches: [main]
+  workflow_dispatch:
+    inputs:
+      contract:
+        description: 'Contract to deploy'
+        required: true
+        default: 'all'
+        type: choice
+        options:
+          - all
+          - poll_contract
+          - rewards_contract
+
+env:
+  CARGO_TERM_COLOR: always
 
 jobs:
   deploy:
-    name: Deploy to Vercel
+    name: Deploy to Testnet (${{ matrix.contract }})
     runs-on: ubuntu-latest
-    if: ${{ vars.ENABLE_DEPLOY == 'true' }}
+    if: ${{ github.event.inputs.contract == 'all' || github.event.inputs.contract == matrix.contract }}
+    strategy:
+      matrix:
+        contract: [poll_contract, rewards_contract]
     defaults:
       run:
-        working-directory: frontend
+        working-directory: ./contracts/${{ matrix.contract }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: Set up Node.js
-        uses: actions/setup-node@v4
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
         with:
-          node-version: '22'
+          targets: wasm32-unknown-unknown
 
-      - name: Install Vercel CLI
-        run: npm install --global vercel@latest
+      - name: Cache cargo registry and binaries
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            ~/.cargo/bin
+            contracts/${{ matrix.contract }}/target
+          key: ${{ runner.os }}-cargo-deploy-${{ matrix.contract }}-${{ hashFiles(format('contracts/{0}/Cargo.lock', matrix.contract)) }}
 
-      - name: Pull Vercel environment
-        run: vercel pull --yes --environment=production --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Install cargo-binstall
+        run: |
+          curl -L --proto '=https' --tlsv1.2 -sSf https://raw.githubusercontent.com/cargo-bins/cargo-binstall/main/install-from-binstall-release.sh | bash
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Build project
-        run: vercel build --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Install Stellar CLI
+        run: cargo binstall --no-confirm stellar-cli
 
-      - name: Deploy to Vercel
-        run: vercel deploy --prebuilt --prod --token=${{ secrets.VERCEL_TOKEN }}
+      - name: Build contracts
+        run: |
+          cargo build --target wasm32-unknown-unknown --release
+          stellar contract optimize --wasm target/wasm32-unknown-unknown/release/${{ matrix.contract }}.wasm
+
+      - name: Deploy to Testnet
+        run: |
+          echo "Generating identities..."
+          stellar keys generate deployer --network testnet
+          stellar keys fund deployer --network testnet
+          echo "Deploying Contract..."
+          CONTRACT_ID=$(stellar contract deploy \
+            --wasm target/wasm32-unknown-unknown/release/${{ matrix.contract }}.optimized.wasm \
+            --source deployer \
+            --network testnet 2>deploy_err.log) || { cat deploy_err.log; exit 1; }
+          echo "Contract deployed at: $CONTRACT_ID"
+          
+          echo "Fetching Test Token (Native XLM asset) ID..."
+          TOKEN_ID=$(stellar contract id asset --asset native --network testnet)
+          echo "Native Token ID is: $TOKEN_ID"
